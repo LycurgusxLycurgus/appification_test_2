@@ -31,10 +31,13 @@ export function enterTaskGame() {
   // Ensure we have some sample tasks if none exist
   if (!gameState.tasks || gameState.tasks.length === 0) {
     gameState.tasks = [
-      { text: 'Example Task 1', completed: false },
-      { text: 'Example Task 2', completed: false },
-      { text: 'Example Task 3', completed: false }
+      { id: 'sample1', text: 'Example Task 1', completed: false }
     ];
+  }
+  
+  // Initialize taskTokens if not set
+  if (gameState.taskTokens === undefined) {
+    gameState.taskTokens = 0;
   }
   
   // Clear any existing bullets
@@ -207,6 +210,9 @@ export function updateTaskGame(deltaTime, state, canvas) {
             taskObj.color = '#8BC34A';
             state.taskTokens++;
             createTokenEffect();
+            
+            // Save tasks after marking as completed
+            taskStorage.saveTasks(state.tasks);
           } else {
             // Archive (remove) the task.
             state.tasks.splice(taskObj.index, 1);
@@ -217,6 +223,9 @@ export function updateTaskGame(deltaTime, state, canvas) {
               state.taskObjects[k].index--;
             }
             createArchiveEffect(taskObj.x + taskObj.width / 2, taskObj.y + taskObj.height / 2);
+            
+            // Save tasks after archiving
+            taskStorage.saveTasks(state.tasks);
           }
           state.bullets.splice(i, 1);
           break;
@@ -257,14 +266,6 @@ export function updateTaskGame(deltaTime, state, canvas) {
       state.lastShootTime = currentTime;
       shootTaskGame(state);
     }
-  }
-
-  // After task completion:
-  taskStorage.saveTasks(state.tasks);
-  
-  // After token changes:
-  if (state.taskTokens !== undefined) {
-    taskStorage.saveTokens(state.taskTokens);
   }
 }
 
@@ -463,10 +464,18 @@ export function createNewTaskInput() {
     
     if (e.key === 'Enter') {
       if (input.value.trim()) {
-        gameState.tasks.push({ text: input.value.trim(), completed: false });
+        const newTask = { 
+          id: 'task_' + Date.now(), 
+          text: input.value.trim(), 
+          completed: false 
+        };
+        gameState.tasks.push(newTask);
         setupTaskGameEnvironment(gameState, document.querySelector('canvas'));
         document.body.removeChild(inputContainer);
         gameState.isPaused = false;
+        
+        // Save tasks after adding a new one
+        taskStorage.saveTasks(gameState.tasks);
       }
     } else if (e.key === 'Escape') {
       document.body.removeChild(inputContainer);
@@ -484,10 +493,18 @@ export function createNewTaskInput() {
 
   addButton.addEventListener('click', () => {
     if (input.value.trim()) {
-      gameState.tasks.push({ text: input.value.trim(), completed: false });
+      const newTask = { 
+        id: 'task_' + Date.now(), 
+        text: input.value.trim(), 
+        completed: false 
+      };
+      gameState.tasks.push(newTask);
       setupTaskGameEnvironment(gameState, document.querySelector('canvas'));
       document.body.removeChild(inputContainer);
       gameState.isPaused = false;
+      
+      // Save tasks after adding a new one
+      taskStorage.saveTasks(gameState.tasks);
     }
   });
 
@@ -506,9 +523,6 @@ export function createNewTaskInput() {
   setTimeout(() => {
     input.focus();
   }, 10);
-
-  // After creating a new task, save it to storage
-  taskStorage.saveTasks(gameState.tasks);
 }
 
 /**
@@ -542,6 +556,9 @@ function createTokenEffect() {
     requestAnimationFrame(animateToken);
   }
   animateToken();
+  
+  // Save tokens after incrementing
+  taskStorage.saveTokens(gameState.taskTokens);
 }
 
 /**
@@ -604,6 +621,10 @@ function loadSavedTasksAndTokens() {
   // Load tokens
   const savedTokens = taskStorage.getTokens();
   if (typeof savedTokens === 'number') {
-    gameState.tokens = savedTokens;
+    gameState.taskTokens = savedTokens;
+  } else if (savedTokens !== null) {
+    gameState.taskTokens = parseInt(savedTokens, 10) || 0;
+  } else {
+    gameState.taskTokens = 0;
   }
 }
