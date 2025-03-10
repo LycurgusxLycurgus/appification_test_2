@@ -1,6 +1,11 @@
 import * as PIXI from 'pixi.js';
 
 export const initPixiScene = (app, state, setMode) => {
+  // Initialize bullets array if it doesn't exist
+  if (!state.bullets) {
+    state.bullets = [];
+  }
+  
   // Create platforms
   state.platforms = createPlatforms(app);
   // Create enemies, game apps, player sprite, bullets, etc.
@@ -35,6 +40,11 @@ const createGameApps = (app) => {
 };
 
 export const updatePixiScene = (app, deltaTime, state, setMode) => {
+  // Ensure bullets array exists
+  if (!state.bullets) {
+    state.bullets = [];
+  }
+  
   // Update positions, collision detection, bullet movement, etc.
   // For example, update your player sprite or check for interactions.
 };

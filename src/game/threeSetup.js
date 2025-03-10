@@ -1,20 +1,64 @@
 import * as THREE from 'three';
 import { PointerLockControls } from 'three/examples/jsm/controls/PointerLockControls';
+import { enterTrainingChallenge, updateTrainingChallenge, cleanupTrainingChallenge } from './trainingChallengeSetup';
+
+// Graphics quality presets
+const QUALITY_SETTINGS = {
+  low: {
+    pixelRatio: 0.5,
+    shadowMapEnabled: false,
+    antialias: false,
+    targetCount: 3,
+    drawDistance: 50,
+    textureQuality: 'low',
+    particleCount: 5
+  },
+  medium: {
+    pixelRatio: 0.75,
+    shadowMapEnabled: true,
+    antialias: true,
+    targetCount: 5,
+    drawDistance: 100,
+    textureQuality: 'medium',
+    particleCount: 10
+  },
+  high: {
+    pixelRatio: 1.0,
+    shadowMapEnabled: true,
+    antialias: true,
+    targetCount: 8,
+    drawDistance: 200,
+    textureQuality: 'high',
+    particleCount: 20
+  }
+};
 
 // BulletManager class to handle all bullet-related operations
 class BulletManager {
-  constructor(scene) {
+  constructor(scene, quality = 'low') {
     this.scene = scene;
     this.bullets = [];
     this.raycaster = new THREE.Raycaster();
     this.active = true;
+    this.quality = quality;
+    
+    // Set quality-specific properties
+    this.maxBullets = QUALITY_SETTINGS[quality].particleCount;
+    this.bulletDetail = quality === 'low' ? 4 : (quality === 'medium' ? 6 : 8);
   }
 
   createBullet(camera) {
     if (!this.active) return;
+    
+    // Limit max bullets based on quality
+    if (this.bullets.length >= this.maxBullets) {
+      // Remove oldest bullet if at max
+      const oldestBullet = this.bullets.shift();
+      this.scene.remove(oldestBullet);
+    }
 
-    // Create bullet geometry and material
-    const bulletGeometry = new THREE.SphereGeometry(0.1, 8, 8);
+    // Create bullet geometry and material with detail level based on quality
+    const bulletGeometry = new THREE.SphereGeometry(0.1, this.bulletDetail, this.bulletDetail);
     const bulletMaterial = new THREE.MeshStandardMaterial({ 
       color: 0xFFD700, 
       emissive: 0xFFD700,
@@ -42,7 +86,7 @@ class BulletManager {
       speed: 0.15,
       lastUpdateTime: Date.now(),
       distanceTraveled: 0,
-      maxDistance: 100,
+      maxDistance: QUALITY_SETTINGS[this.quality].drawDistance,
       maxStepSize: 0.5
     };
     
@@ -179,6 +223,94 @@ class BulletManager {
   }
 }
 
+// Function to apply quality settings to renderer
+const applyQualitySettings = (renderer, quality) => {
+  const settings = QUALITY_SETTINGS[quality];
+  
+  // Set pixel ratio (lower = better performance)
+  renderer.setPixelRatio(window.devicePixelRatio * settings.pixelRatio);
+  
+  // Enable/disable shadows
+  renderer.shadowMap.enabled = settings.shadowMapEnabled;
+  
+  // Set shadow map type based on quality
+  if (settings.shadowMapEnabled) {
+    renderer.shadowMap.type = quality === 'high' 
+      ? THREE.PCFSoftShadowMap 
+      : THREE.BasicShadowMap;
+  }
+  
+  console.log(`Applied ${quality} quality settings`);
+};
+
+// Create quality settings UI
+const createQualitySettingsUI = (state) => {
+  const settingsContainer = document.createElement('div');
+  settingsContainer.id = 'quality-settings';
+  settingsContainer.style.position = 'absolute';
+  settingsContainer.style.top = '10px';
+  settingsContainer.style.right = '10px';
+  settingsContainer.style.backgroundColor = 'rgba(0, 0, 0, 0.5)';
+  settingsContainer.style.padding = '10px';
+  settingsContainer.style.borderRadius = '5px';
+  settingsContainer.style.color = 'white';
+  settingsContainer.style.fontFamily = 'Arial, sans-serif';
+  settingsContainer.style.zIndex = '1000';
+  settingsContainer.style.display = state.mode === '3D' ? 'block' : 'none';
+  
+  const title = document.createElement('div');
+  title.textContent = 'Graphics Quality';
+  title.style.marginBottom = '5px';
+  title.style.fontWeight = 'bold';
+  settingsContainer.appendChild(title);
+  
+  // Create radio buttons for each quality level
+  ['low', 'medium', 'high'].forEach(quality => {
+    const label = document.createElement('label');
+    label.style.display = 'block';
+    label.style.margin = '5px 0';
+    
+    const radio = document.createElement('input');
+    radio.type = 'radio';
+    radio.name = 'quality';
+    radio.value = quality;
+    radio.checked = state.graphicsQuality === quality;
+    radio.style.marginRight = '5px';
+    
+    radio.addEventListener('change', () => {
+      if (radio.checked) {
+        state.setGraphicsQuality(quality);
+        // Reload the page to apply new settings
+        // This is a simple approach - a more complex one would update everything in real-time
+        alert(`Graphics quality set to ${quality}. The game will reload to apply changes.`);
+        window.location.reload();
+      }
+    });
+    
+    label.appendChild(radio);
+    label.appendChild(document.createTextNode(quality.charAt(0).toUpperCase() + quality.slice(1)));
+    settingsContainer.appendChild(label);
+  });
+  
+  // Add a note about performance
+  const note = document.createElement('div');
+  note.textContent = 'Lower quality = better performance';
+  note.style.fontSize = '10px';
+  note.style.marginTop = '5px';
+  note.style.fontStyle = 'italic';
+  settingsContainer.appendChild(note);
+  
+  document.body.appendChild(settingsContainer);
+  
+  // Update visibility when game mode changes
+  const updateVisibility = () => {
+    settingsContainer.style.display = state.mode === '3D' ? 'block' : 'none';
+  };
+  
+  // Return the update function so it can be called when mode changes
+  return updateVisibility;
+};
+
 export const initThreeScene = (container, state, setMode) => {
   // Clean up any existing event listeners and bullet manager first
   // This ensures we don't have duplicates when switching back from 2D mode
@@ -191,17 +323,35 @@ export const initThreeScene = (container, state, setMode) => {
     state.bulletManager.cleanup();
     state.bulletManager = null;
   }
+  
+  // Get current quality settings
+  const quality = state.graphicsQuality || 'low';
+  const qualitySettings = QUALITY_SETTINGS[quality];
 
   const scene = new THREE.Scene();
   scene.background = new THREE.Color(0x87CEEB);
 
-  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+  // Set fog based on quality (reduces draw distance on lower settings)
+  if (quality === 'low') {
+    scene.fog = new THREE.Fog(0x87CEEB, 20, qualitySettings.drawDistance);
+  } else if (quality === 'medium') {
+    scene.fog = new THREE.Fog(0x87CEEB, 30, qualitySettings.drawDistance);
+  }
+
+  const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, qualitySettings.drawDistance);
   camera.position.set(0, 1.7, 0);
 
-  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  // Create renderer with quality-appropriate settings
+  const renderer = new THREE.WebGLRenderer({ 
+    antialias: qualitySettings.antialias,
+    powerPreference: 'high-performance'
+  });
   renderer.setSize(window.innerWidth, window.innerHeight);
-  renderer.shadowMap.enabled = true;
+  applyQualitySettings(renderer, quality);
   container.appendChild(renderer.domElement);
+  
+  // Store the renderer in the state for access by other components
+  state.renderer = renderer;
 
   // Setup pointer lock controls
   const controls = new PointerLockControls(camera, document.body);
@@ -229,21 +379,37 @@ export const initThreeScene = (container, state, setMode) => {
   });
 
   // Add scene objects (floor, walls, portal, targets)
-  addFloor(scene);
-  addWalls(scene);
-  addPortal(scene, state);
-  addTargets(scene);
+  addFloor(scene, quality);
+  addWalls(scene, quality);
+  addPortal(scene, state, quality);
+  addTargets(scene, quality, qualitySettings.targetCount);
 
-  // Lighting
-  const ambientLight = new THREE.AmbientLight(0x404040, 1.5);
+  // Lighting - adjust based on quality
+  const ambientLight = new THREE.AmbientLight(0x404040, quality === 'low' ? 2.0 : 1.5);
   scene.add(ambientLight);
-  const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
-  directionalLight.position.set(5, 10, 7.5);
-  directionalLight.castShadow = true;
-  scene.add(directionalLight);
+  
+  // Only add directional light with shadows on medium/high
+  if (quality !== 'low') {
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 10, 7.5);
+    directionalLight.castShadow = qualitySettings.shadowMapEnabled;
+    
+    // Adjust shadow map size based on quality
+    if (directionalLight.castShadow) {
+      directionalLight.shadow.mapSize.width = quality === 'high' ? 1024 : 512;
+      directionalLight.shadow.mapSize.height = quality === 'high' ? 1024 : 512;
+    }
+    
+    scene.add(directionalLight);
+  } else {
+    // Add a simple directional light without shadows for low quality
+    const directionalLight = new THREE.DirectionalLight(0xffffff, 1);
+    directionalLight.position.set(5, 10, 7.5);
+    scene.add(directionalLight);
+  }
 
-  // Create bullet manager
-  state.bulletManager = new BulletManager(scene);
+  // Create bullet manager with quality setting
+  state.bulletManager = new BulletManager(scene, quality);
   
   // Store the shoot handler function so we can remove it later
   const shootHandler = (e) => {
@@ -257,41 +423,76 @@ export const initThreeScene = (container, state, setMode) => {
   
   // Store the handler in state so we can remove it when cleaning up
   state.shootHandler = shootHandler;
+  
+  // Create quality settings UI
+  const updateSettingsVisibility = createQualitySettingsUI(state);
+  state.updateSettingsVisibility = updateSettingsVisibility;
 
   return { scene, camera, renderer, controls };
 };
 
-const addFloor = (scene) => {
-  const floorGeometry = new THREE.PlaneGeometry(50, 50);
+const addFloor = (scene, quality) => {
+  // Adjust floor detail based on quality
+  const segments = quality === 'low' ? 10 : (quality === 'medium' ? 25 : 50);
+  
+  const floorGeometry = new THREE.PlaneGeometry(50, 50, segments, segments);
   const floorMaterial = new THREE.MeshStandardMaterial({
     color: 0x555555,
     side: THREE.DoubleSide,
-    roughness: 0.8
+    roughness: 0.8,
+    // Simplify material on low quality
+    flatShading: quality === 'low'
   });
   const floor = new THREE.Mesh(floorGeometry, floorMaterial);
   floor.rotation.x = Math.PI / 2;
   floor.position.y = 0;
+  
+  // Only receive shadows on medium/high quality
+  if (quality !== 'low') {
+    floor.receiveShadow = true;
+  }
+  
   scene.add(floor);
 };
 
-const addWalls = (scene) => {
-  const wallMaterial = new THREE.MeshStandardMaterial({ color: 0x8B4513 });
-  const northWall = new THREE.Mesh(new THREE.BoxGeometry(50, 4, 1), wallMaterial);
+const addWalls = (scene, quality) => {
+  // Adjust wall material based on quality
+  const wallMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0x8B4513,
+    // Simplify material on low quality
+    flatShading: quality === 'low'
+  });
+  
+  // Adjust wall segments based on quality
+  const segments = quality === 'low' ? 1 : (quality === 'medium' ? 2 : 4);
+  
+  const northWall = new THREE.Mesh(new THREE.BoxGeometry(50, 4, 1, segments, segments, segments), wallMaterial);
   northWall.position.set(0, 2, -25);
+  if (quality !== 'low') northWall.castShadow = true;
   scene.add(northWall);
-  const southWall = new THREE.Mesh(new THREE.BoxGeometry(50, 4, 1), wallMaterial);
+  
+  const southWall = new THREE.Mesh(new THREE.BoxGeometry(50, 4, 1, segments, segments, segments), wallMaterial);
   southWall.position.set(0, 2, 25);
+  if (quality !== 'low') southWall.castShadow = true;
   scene.add(southWall);
-  const eastWall = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 50), wallMaterial);
+  
+  const eastWall = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 50, segments, segments, segments), wallMaterial);
   eastWall.position.set(25, 2, 0);
+  if (quality !== 'low') eastWall.castShadow = true;
   scene.add(eastWall);
-  const westWall = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 50), wallMaterial);
+  
+  const westWall = new THREE.Mesh(new THREE.BoxGeometry(1, 4, 50, segments, segments, segments), wallMaterial);
   westWall.position.set(-25, 2, 0);
+  if (quality !== 'low') westWall.castShadow = true;
   scene.add(westWall);
 };
 
-const addPortal = (scene, state) => {
-  const portalGeometry = new THREE.SphereGeometry(0.5, 32, 32);
+const addPortal = (scene, state, quality) => {
+  // Adjust portal detail based on quality
+  const segments = quality === 'low' ? 16 : (quality === 'medium' ? 24 : 32);
+  
+  // Main 2D world portal
+  const portalGeometry = new THREE.SphereGeometry(0.5, segments, segments);
   const portalMaterial = new THREE.MeshStandardMaterial({
     color: 0x00BFFF,
     transparent: true,
@@ -306,15 +507,109 @@ const addPortal = (scene, state) => {
   portalMesh.position.set(5, 1, -5);
   scene.add(portalMesh);
   state.portalMesh = portalMesh;
+  state.portalPosition = { x: 5, y: 1, z: -5 };
+  
+  // Add a text label above the 2D world portal
+  const deadlineDemonCanvas = document.createElement('canvas');
+  const deadlineDemonContext = deadlineDemonCanvas.getContext('2d');
+  deadlineDemonCanvas.width = 256;
+  deadlineDemonCanvas.height = 64;
+  
+  deadlineDemonContext.fillStyle = '#ffffff';
+  deadlineDemonContext.font = 'Bold 20px Arial';
+  deadlineDemonContext.textAlign = 'center';
+  deadlineDemonContext.textBaseline = 'middle';
+  deadlineDemonContext.fillText('DeadlineDemon', 128, 32);
+  
+  const deadlineDemonTexture = new THREE.CanvasTexture(deadlineDemonCanvas);
+  deadlineDemonTexture.minFilter = THREE.LinearFilter;
+  
+  const deadlineDemonLabelMaterial = new THREE.MeshBasicMaterial({
+    map: deadlineDemonTexture,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
+  
+  const deadlineDemonLabelGeometry = new THREE.PlaneGeometry(2, 0.5);
+  const deadlineDemonLabelMesh = new THREE.Mesh(deadlineDemonLabelGeometry, deadlineDemonLabelMaterial);
+  deadlineDemonLabelMesh.position.set(5, 2, -5);
+  
+  // Make label always face the camera
+  deadlineDemonLabelMesh.userData.isLabel = true;
+  
+  scene.add(deadlineDemonLabelMesh);
+  state.deadlineDemonLabel = deadlineDemonLabelMesh;
+  
+  // Training challenge portal (red)
+  const trainingPortalGeometry = new THREE.SphereGeometry(0.5, segments, segments);
+  const trainingPortalMaterial = new THREE.MeshStandardMaterial({
+    color: 0xFF5500,
+    transparent: true,
+    opacity: 0.7,
+    emissive: 0xFF5500,
+    emissiveIntensity: 0.5,
+    roughness: 0.3,
+    metalness: 0.8
+  });
+  const trainingPortalMesh = new THREE.Mesh(trainingPortalGeometry, trainingPortalMaterial);
+  trainingPortalMesh.position.set(-5, 1, -5);
+  scene.add(trainingPortalMesh);
+  state.trainingPortalMesh = trainingPortalMesh;
+  state.trainingPortalPosition = { x: -5, y: 1, z: -5 };
+  
+  // Add a text label above the training portal
+  const canvas = document.createElement('canvas');
+  const context = canvas.getContext('2d');
+  canvas.width = 256;
+  canvas.height = 64;
+  
+  context.fillStyle = '#ffffff';
+  context.font = 'Bold 20px Arial';
+  context.textAlign = 'center';
+  context.textBaseline = 'middle';
+  context.fillText('Training Arena', 128, 32);
+  
+  const texture = new THREE.CanvasTexture(canvas);
+  texture.minFilter = THREE.LinearFilter;
+  
+  const labelMaterial = new THREE.MeshBasicMaterial({
+    map: texture,
+    transparent: true,
+    side: THREE.DoubleSide
+  });
+  
+  const labelGeometry = new THREE.PlaneGeometry(2, 0.5);
+  const labelMesh = new THREE.Mesh(labelGeometry, labelMaterial);
+  labelMesh.position.set(-5, 2, -5);
+  
+  // Make label always face the camera
+  labelMesh.userData.isLabel = true;
+  
+  scene.add(labelMesh);
+  state.trainingPortalLabel = labelMesh;
 };
 
-const addTargets = (scene) => {
-  const targetGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5);
-  const targetMaterial = new THREE.MeshStandardMaterial({ color: 0xFF0000 });
-  for (let i = 0; i < 5; i++) {
+const addTargets = (scene, quality, targetCount) => {
+  // Adjust target detail based on quality
+  const segments = quality === 'low' ? 1 : (quality === 'medium' ? 2 : 4);
+  
+  const targetGeometry = new THREE.BoxGeometry(0.5, 0.5, 0.5, segments, segments, segments);
+  const targetMaterial = new THREE.MeshStandardMaterial({ 
+    color: 0xFF0000,
+    // Simplify material on low quality
+    flatShading: quality === 'low'
+  });
+  
+  for (let i = 0; i < targetCount; i++) {
     const target = new THREE.Mesh(targetGeometry, targetMaterial);
     target.position.set(Math.random() * 40 - 20, 1 + Math.random() * 2, Math.random() * 40 - 20);
     target.userData = { isTarget: true, id: 'target-3d-' + i };
+    
+    // Only cast shadows on medium/high quality
+    if (quality !== 'low') {
+      target.castShadow = true;
+    }
+    
     scene.add(target);
   }
 };
@@ -335,9 +630,43 @@ const checkWallCollision = (x, z) => {
   return false; // No collision
 };
 
-export const updateThreeScene = (deltaTime, scene, camera, controls, state, setMode) => {
+export const updateThreeScene = (deltaTime, scene, camera, controls, state, setMode, renderer) => {
   // Skip updates if game is paused
   if (state.isPaused) return;
+  
+  // Make sure renderer is available (use the one from state if provided renderer is undefined)
+  if (!renderer && state.renderer) {
+    renderer = state.renderer;
+  }
+  
+  // Update settings UI visibility if mode changed
+  if (state.updateSettingsVisibility) {
+    state.updateSettingsVisibility();
+  }
+  
+  // Check if in training challenge mode
+  if (state.mode === 'TRAINING_CHALLENGE') {
+    try {
+      // Update training challenge
+      const challengeActive = updateTrainingChallenge(deltaTime);
+      if (!challengeActive) {
+        console.log("Training challenge ended, returning to 3D mode");
+        // Training challenge ended, return to 3D mode
+        state.mode = '3D';
+        
+        // Make sure we render the main scene again
+        if (renderer) {
+          renderer.render(scene, camera);
+        }
+      }
+      // Note: We don't need to call renderer.render here as the training challenge handles that
+    } catch (error) {
+      console.error("Error in training challenge update:", error);
+      // If there's an error, return to 3D mode
+      state.mode = '3D';
+    }
+    return;
+  }
   
   // Cap deltaTime to prevent huge jumps if the game lags
   const cappedDeltaTime = Math.min(deltaTime, 100);
@@ -420,6 +749,69 @@ export const updateThreeScene = (deltaTime, scene, camera, controls, state, setM
     state.keys['e'] = false; // Reset key to prevent multiple toggles
   }
   
+  // Check for training challenge portal proximity
+  if (state.trainingPortalPosition) {
+    const trainingPortalPosition = new THREE.Vector3(
+      state.trainingPortalPosition.x,
+      state.trainingPortalPosition.y,
+      state.trainingPortalPosition.z
+    );
+    
+    const distanceToTrainingPortal = camera.position.distanceTo(trainingPortalPosition);
+    const trainingPortalVisible = distanceToTrainingPortal < 3;
+    
+    // Training portal interaction
+    if (trainingPortalVisible && state.keys['e']) {
+      console.log("Entering training challenge from portal", { 
+        renderer: renderer ? "defined" : "undefined",
+        scene: scene ? "defined" : "undefined",
+        camera: camera ? "defined" : "undefined"
+      });
+      
+      // Store renderer in state for use in the training challenge
+      if (renderer) {
+        state.renderer = renderer;
+      }
+      
+      // Enter training challenge
+      state.mode = 'TRAINING_CHALLENGE';
+      state.keys['e'] = false; // Reset key to prevent multiple toggles
+      
+      try {
+        // Initialize training challenge - pass renderer as parameter
+        enterTrainingChallenge(scene, camera, renderer, controls);
+      } catch (error) {
+        console.error("Error entering training challenge:", error);
+        // If there's an error, stay in 3D mode
+        state.mode = '3D';
+      }
+    }
+    
+    // Animate training portal
+    if (state.trainingPortalMesh) {
+      state.trainingPortalMesh.rotation.y += 0.01;
+      const scale = 1 + 0.1 * Math.sin(Date.now() * 0.002);
+      state.trainingPortalMesh.scale.set(scale, scale, scale);
+      
+      // Glow effect based on proximity
+      if (trainingPortalVisible) {
+        const glowIntensity = 1 - (distanceToTrainingPortal / 3);
+        state.trainingPortalMesh.material.opacity = 0.7 + glowIntensity * 0.3;
+        
+        // Check if material has emissive property before setting it
+        if (state.trainingPortalMesh.material.emissive) {
+          state.trainingPortalMesh.material.emissive.set(0xFF5500);
+          state.trainingPortalMesh.material.emissiveIntensity = 0.5 + glowIntensity * 0.5;
+        }
+      }
+    }
+    
+    // Make training portal label face the camera
+    if (state.trainingPortalLabel) {
+      state.trainingPortalLabel.lookAt(camera.position);
+    }
+  }
+  
   // Animate portal
   if (state.portalMesh) {
     state.portalMesh.rotation.y += 0.01;
@@ -437,6 +829,39 @@ export const updateThreeScene = (deltaTime, scene, camera, controls, state, setM
         state.portalMesh.material.emissiveIntensity = glowIntensity;
       }
     }
+    
+    // Make DeadlineDemon label face the camera
+    if (state.deadlineDemonLabel) {
+      state.deadlineDemonLabel.lookAt(camera.position);
+    }
+  }
+  
+  // Render the scene at the end of the update
+  if (renderer && state.mode === '3D') {
+    renderer.render(scene, camera);
+  }
+  
+  // Update FPS counter
+  state.frameCount3D = state.frameCount3D || 0;
+  state.lastFpsUpdate3D = state.lastFpsUpdate3D || performance.now();
+  
+  state.frameCount3D++;
+  const now = performance.now();
+  const elapsed = now - state.lastFpsUpdate3D;
+  
+  // Update FPS display every 500ms
+  if (elapsed >= 500) {
+    state.fps = Math.round((state.frameCount3D * 1000) / elapsed);
+    
+    // Update the FPS display
+    const fpsElement = document.getElementById('fps');
+    if (fpsElement) {
+      fpsElement.textContent = state.fps;
+    }
+    
+    // Reset counters
+    state.lastFpsUpdate3D = now;
+    state.frameCount3D = 0;
   }
 };
 
@@ -452,6 +877,11 @@ export const cleanupThreeScene = (state) => {
   if (state.bulletManager) {
     state.bulletManager.cleanup();
     state.bulletManager = null;
+  }
+  
+  // Cleanup training challenge if active
+  if (state.mode === 'TRAINING_CHALLENGE') {
+    cleanupTrainingChallenge();
   }
 };
 

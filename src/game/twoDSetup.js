@@ -1,5 +1,6 @@
 // src/game/twoDSetup.js
 import { enterTaskGame } from './taskGameSetup';
+import { enterTrainingArena2D } from './trainingArena2DSetup';
 
 export const init2DEnvironment = (container, state) => {
   const canvas = document.createElement('canvas');
@@ -36,7 +37,8 @@ const createGameApps = (canvas) => [
   { x: 650, y: canvas.height - 480, width: 60, height: 60, type: 'portal', label: 'Portal to 3D' },
   { x: 250, y: canvas.height - 180, width: 40, height: 40, type: 'app', app: 'notes', label: 'Notes' },
   { x: 600, y: canvas.height - 280, width: 40, height: 40, type: 'app', app: 'timer', label: 'Timer' },
-  { x: 400, y: canvas.height - 480, width: 50, height: 50, type: 'app', app: 'tasks', label: 'Tasks', color: '#4CAF50' }
+  { x: 400, y: canvas.height - 480, width: 50, height: 50, type: 'app', app: 'tasks', label: 'Tasks', color: '#4CAF50' },
+  { x: 100, y: canvas.height - 480, width: 50, height: 50, type: 'app', app: 'training', label: 'Training Arena', color: '#FF5722' }
 ];
 
 export const update2D = (deltaTime, state) => {
@@ -104,6 +106,13 @@ export const update2D = (deltaTime, state) => {
   // Update bullets with collision detection
   for (let i = state.bullets.length - 1; i >= 0; i--) {
     const bullet = state.bullets[i];
+    
+    // Skip if bullet is undefined (safety check)
+    if (!bullet) {
+      state.bullets.splice(i, 1);
+      continue;
+    }
+    
     bullet.x += bullet.vx;
     bullet.y += bullet.vy || 0;
 
@@ -118,6 +127,9 @@ export const update2D = (deltaTime, state) => {
       continue;
     }
 
+    // Flag to track if bullet has been removed
+    let bulletRemoved = false;
+
     // Check collisions with enemies
     for (let j = state.enemies.length - 1; j >= 0; j--) {
       const enemy = state.enemies[j];
@@ -129,6 +141,7 @@ export const update2D = (deltaTime, state) => {
       ) {
         enemy.health = (enemy.health || 2) - 1;
         state.bullets.splice(i, 1);
+        bulletRemoved = true;
         if (enemy.health <= 0) {
           if (enemy.type === 'app') {
             alert(`Activating ${enemy.app} app`);
@@ -141,33 +154,125 @@ export const update2D = (deltaTime, state) => {
       }
     }
 
-    // If bullet still exists, check collisions with game apps
-    if (i < state.bullets.length) {
-      for (let k = 0; k < state.gameApps.length; k++) {
-        const app = state.gameApps[k];
-        if (
-          bullet.x > app.x &&
-          bullet.x < app.x + app.width &&
-          bullet.y > app.y &&
-          bullet.y < app.y + app.height
-        ) {
-          if (app.type === 'portal') {
-            if (state.setMode) {
-              state.setMode('3D');
-            } else {
-              state.mode = '3D';
-            }
-          } else if (app.type === 'app') {
-            if (app.app === 'tasks') {
-              enterTaskGame();
-            } else {
-              alert(`Activating ${app.app} app`);
-            }
+    // Skip the rest of the loop if bullet was removed
+    if (bulletRemoved) {
+      continue;
+    }
+
+    // Check collisions with game apps
+    for (let k = 0; k < state.gameApps.length; k++) {
+      const app = state.gameApps[k];
+      if (
+        bullet.x > app.x &&
+        bullet.x < app.x + app.width &&
+        bullet.y > app.y &&
+        bullet.y < app.y + app.height
+      ) {
+        // Remove bullet
+        state.bullets.splice(i, 1);
+        bulletRemoved = true;
+        
+        // Handle different app types
+        if (app.type === 'portal') {
+          if (state.setMode) {
+            state.setMode('3D');
+          } else {
+            state.mode = '3D';
           }
-          state.bullets.splice(i, 1);
-          break;
+        } else if (app.type === 'app') {
+          if (app.app === 'tasks') {
+            enterTaskGame();
+          } else if (app.app === 'training') {
+            console.log("Activating 2D training arena");
+            // Make sure we have the canvas and context
+            if (state.canvas && state.ctx) {
+              console.log("Canvas and context available, entering training arena");
+              enterTrainingArena2D(state.canvas, state.ctx, state);
+            } else {
+              console.error("Canvas or context not available for training arena");
+            }
+          } else if (app.app === 'taskchallenge' && state.currentTaskChallenge) {
+            console.log("Activating 2D task arena challenge directly");
+            // Make sure we have the canvas and context
+            if (state.canvas && state.ctx) {
+              console.log("Canvas and context available, entering task arena");
+              // Direct path to task arena
+              import('./taskArena2DSetup').then(module => {
+                module.enterTaskArena2D(
+                  state.canvas, 
+                  state.ctx, 
+                  state, 
+                  state.currentTaskChallenge.requiredScore,
+                  (score) => {
+                    console.log("Task challenge completed with score:", score);
+                    
+                    // Check if the score requirement was met
+                    const isSuccess = score >= state.currentTaskChallenge.requiredScore;
+                    
+                    // Process challenge result
+                    if (isSuccess) {
+                      console.log("Challenge successful! Marking task as completed");
+                      
+                      // Mark task as completed
+                      state.currentTaskChallenge.task.completed = true;
+                      state.currentTaskChallenge.taskObj.locked = false;
+                      state.currentTaskChallenge.taskObj.completed = true;
+                      state.currentTaskChallenge.taskObj.color = '#8BC34A';
+                      
+                      // Increase tokens
+                      state.taskTokens++;
+                      
+                      // Create token effect
+                      import('./taskGameSetup').then(taskModule => {
+                        taskModule.createTokenEffect();
+                      });
+                    } else {
+                      console.log("Challenge failed. Task remains incomplete");
+                      // In-game notification
+                      import('./taskGameSetup').then(taskModule => {
+                        taskModule.createFailureNotification(state.currentTaskChallenge.requiredScore);
+                      });
+                    }
+                    
+                    // Clear task challenge reference
+                    state.currentTaskChallenge = null;
+                    
+                    // Return to task game
+                    console.log("Returning to task game mode");
+                    state.mode = 'TASK_GAME';
+                    
+                    // Reset key states
+                    for (const key in state.keys) {
+                      state.keys[key] = false;
+                    }
+                    
+                    // Restore player position
+                    if (state.savedTaskGamePosition) {
+                      state.taskGamePosition.x = state.savedTaskGamePosition.x;
+                      state.taskGamePosition.y = state.savedTaskGamePosition.y;
+                    }
+                    
+                    // Ensure the task game environment is properly set up
+                    import('./taskGameSetup').then(taskModule => {
+                      taskModule.setupTaskGameEnvironment(state, state.canvas);
+                    });
+                  }
+                );
+              });
+            } else {
+              console.error("Canvas or context not available for task arena");
+            }
+          } else {
+            alert(`Activating ${app.app} app`);
+          }
         }
+        break;
       }
+    }
+    
+    // Skip the rest of the loop if bullet was removed
+    if (bulletRemoved) {
+      continue;
     }
   }
 };
@@ -217,6 +322,7 @@ export const render2D = (ctx, state, canvas) => {
       if (app.app === 'tasks') icon = 'T';
       if (app.app === 'notes') icon = 'N';
       if (app.app === 'timer') icon = 'C';
+      if (app.app === 'training') icon = 'TR';
       ctx.fillText(icon, app.x + app.width / 2, app.y + app.height / 2 + 6);
       ctx.fillStyle = '#FFFFFF';
       ctx.font = '12px Arial';
@@ -284,3 +390,285 @@ export const render2D = (ctx, state, canvas) => {
   ctx.textAlign = 'left';
   ctx.fillText(`Tokens: ${state.taskTokens}`, 20, canvas.height - 30);
 };
+
+// Export the handleAppActivation function so it can be used by other modules
+export function handleAppActivation(app, state) {
+  console.log("Handling app activation:", app);
+  
+  if (!app) return;
+  
+  // Import the transition manager for mode changes
+  import('./modeTransitionManager').then(({ transitionGameMode }) => {
+    switch (app.type) {
+      case 'website': {
+        // Handle website activation
+        if (app.url) {
+          window.open(app.url, '_blank');
+        }
+        break;
+      }
+      case 'mode': {
+        // Handle mode change using transition manager
+        if (app.mode === '3D') {
+          transitionGameMode('3D');
+        }
+        break;
+      }
+      case 'app': {
+        if (app.app === 'tasks') {
+          // Use transition manager for task game
+          transitionGameMode('TASK_GAME', {}, () => {
+            import('./taskGameSetup').then(module => {
+              if (module.enterTaskGame) {
+                module.enterTaskGame();
+              }
+            });
+          });
+        } else if (app.app === 'training') {
+          console.log("Activating 2D training arena");
+          // Make sure we have the canvas and context
+          if (state.canvas && state.ctx) {
+            console.log("Canvas and context available, entering training arena");
+            // Use transition manager for training arena
+            transitionGameMode('2D_TRAINING', {}, () => {
+              import('./trainingArena2DSetup').then(module => {
+                if (module.enterTrainingArena2D) {
+                  module.enterTrainingArena2D(state.canvas, state.ctx, state);
+                }
+              });
+            });
+          } else {
+            console.error("Canvas or context not available for training arena");
+          }
+        } else if (app.app === 'taskchallenge' && state.currentTaskChallenge) {
+          console.log("Activating 2D task arena challenge directly");
+          // Make sure we have the canvas and context
+          if (state.canvas && state.ctx) {
+            console.log("Canvas and context available, entering task arena");
+            // Use transition manager for task arena - transition directly to 2D_TASK_ARENA
+            transitionGameMode('2D_TASK_ARENA', {}, () => {
+              // Direct path to task arena
+              import('./taskArena2DSetup').then(module => {
+                module.enterTaskArena2D(
+                  state.canvas, 
+                  state.ctx, 
+                  state, 
+                  state.currentTaskChallenge.requiredScore,
+                  (score) => {
+                    console.log("Task challenge completed with score:", score);
+                    
+                    // Check if the score requirement was met
+                    const isSuccess = score >= state.currentTaskChallenge.requiredScore;
+                    
+                    // Process challenge result
+                    if (isSuccess) {
+                      console.log("Challenge successful! Marking task as completed");
+                      
+                      // Mark task as completed
+                      state.currentTaskChallenge.task.completed = true;
+                      state.currentTaskChallenge.taskObj.locked = false;
+                      state.currentTaskChallenge.taskObj.completed = true;
+                      state.currentTaskChallenge.taskObj.color = '#8BC34A';
+                      
+                      // Increase tokens
+                      state.taskTokens++;
+                      
+                      // Create token effect
+                      import('./taskGameSetup').then(taskModule => {
+                        taskModule.createTokenEffect();
+                      });
+                    } else {
+                      console.log("Challenge failed. Task remains incomplete");
+                      // In-game notification
+                      import('./taskGameSetup').then(taskModule => {
+                        taskModule.createFailureNotification(state.currentTaskChallenge.requiredScore);
+                      });
+                    }
+                    
+                    // Return to task game using transition manager - transition directly to TASK_GAME
+                    import('./modeTransitionManager').then(({ transitionGameMode }) => {
+                      // Transition directly to TASK_GAME mode
+                      transitionGameMode('TASK_GAME', {}, () => {
+                        // Clear task challenge reference
+                        state.currentTaskChallenge = null;
+                        
+                        // Reset key states
+                        for (const key in state.keys) {
+                          state.keys[key] = false;
+                        }
+                        
+                        // Restore player position
+                        if (state.savedTaskGamePosition) {
+                          state.taskGamePosition.x = state.savedTaskGamePosition.x;
+                          state.taskGamePosition.y = state.savedTaskGamePosition.y;
+                        }
+                        
+                        // Ensure the task game environment is properly set up
+                        import('./taskGameSetup').then(taskModule => {
+                          taskModule.setupTaskGameEnvironment(state, state.canvas);
+                        });
+                      });
+                    }).catch(error => {
+                      console.error("Error importing modeTransitionManager:", error);
+                      // Fallback to old method
+                      import('./taskGameSetup').then(taskModule => {
+                        if (taskModule.returnToTaskGame) {
+                          taskModule.returnToTaskGame(score);
+                        } else {
+                          // Manual fallback
+                          state.currentTaskChallenge = null;
+                          state.mode = 'TASK_GAME';
+                          
+                          // Reset key states
+                          for (const key in state.keys) {
+                            state.keys[key] = false;
+                          }
+                          
+                          // Restore player position
+                          if (state.savedTaskGamePosition) {
+                            state.taskGamePosition.x = state.savedTaskGamePosition.x;
+                            state.taskGamePosition.y = state.savedTaskGamePosition.y;
+                          }
+                          
+                          // Ensure the task game environment is properly set up
+                          taskModule.setupTaskGameEnvironment(state, state.canvas);
+                        }
+                      });
+                    });
+                  }
+                );
+              });
+            });
+          } else {
+            console.error("Canvas or context not available for task arena");
+          }
+        } else {
+          alert(`Activating ${app.app} app`);
+        }
+        break;
+      }
+      default:
+        console.warn("Unknown app type:", app.type);
+        break;
+    }
+  }).catch(error => {
+    console.error("Error importing modeTransitionManager:", error);
+    // Fallback to original implementation if transition manager fails
+    handleAppActivationFallback(app, state);
+  });
+}
+
+// Fallback function to handle app activation without the transition manager
+function handleAppActivationFallback(app, state) {
+  console.log("Using fallback app activation for:", app);
+  
+  switch (app.type) {
+    case 'website': {
+      // Handle website activation
+      if (app.url) {
+        window.open(app.url, '_blank');
+      }
+      break;
+    }
+    case 'mode': {
+      // Handle mode change
+      if (app.mode === '3D') {
+        state.mode = '3D';
+      }
+      break;
+    }
+    case 'app': {
+      if (app.app === 'tasks') {
+        import('./taskGameSetup').then(module => {
+          module.enterTaskGame();
+        });
+      } else if (app.app === 'training') {
+        console.log("Activating 2D training arena");
+        // Make sure we have the canvas and context
+        if (state.canvas && state.ctx) {
+          console.log("Canvas and context available, entering training arena");
+          enterTrainingArena2D(state.canvas, state.ctx, state);
+        } else {
+          console.error("Canvas or context not available for training arena");
+        }
+      } else if (app.app === 'taskchallenge' && state.currentTaskChallenge) {
+        console.log("Activating 2D task arena challenge directly");
+        // Make sure we have the canvas and context
+        if (state.canvas && state.ctx) {
+          console.log("Canvas and context available, entering task arena");
+          // Direct path to task arena
+          import('./taskArena2DSetup').then(module => {
+            module.enterTaskArena2D(
+              state.canvas, 
+              state.ctx, 
+              state, 
+              state.currentTaskChallenge.requiredScore,
+              (score) => {
+                console.log("Task challenge completed with score:", score);
+                
+                // Check if the score requirement was met
+                const isSuccess = score >= state.currentTaskChallenge.requiredScore;
+                
+                // Process challenge result
+                if (isSuccess) {
+                  console.log("Challenge successful! Marking task as completed");
+                  
+                  // Mark task as completed
+                  state.currentTaskChallenge.task.completed = true;
+                  state.currentTaskChallenge.taskObj.locked = false;
+                  state.currentTaskChallenge.taskObj.completed = true;
+                  state.currentTaskChallenge.taskObj.color = '#8BC34A';
+                  
+                  // Increase tokens
+                  state.taskTokens++;
+                  
+                  // Create token effect
+                  import('./taskGameSetup').then(taskModule => {
+                    taskModule.createTokenEffect();
+                  });
+                } else {
+                  console.log("Challenge failed. Task remains incomplete");
+                  // In-game notification
+                  import('./taskGameSetup').then(taskModule => {
+                    taskModule.createFailureNotification(state.currentTaskChallenge.requiredScore);
+                  });
+                }
+                
+                // Clear task challenge reference
+                state.currentTaskChallenge = null;
+                
+                // Return to task game
+                console.log("Returning to task game mode");
+                state.mode = 'TASK_GAME';
+                
+                // Reset key states
+                for (const key in state.keys) {
+                  state.keys[key] = false;
+                }
+                
+                // Restore player position
+                if (state.savedTaskGamePosition) {
+                  state.taskGamePosition.x = state.savedTaskGamePosition.x;
+                  state.taskGamePosition.y = state.savedTaskGamePosition.y;
+                }
+                
+                // Ensure the task game environment is properly set up
+                import('./taskGameSetup').then(taskModule => {
+                  taskModule.setupTaskGameEnvironment(state, state.canvas);
+                });
+              }
+            );
+          });
+        } else {
+          console.error("Canvas or context not available for task arena");
+        }
+      } else {
+        alert(`Activating ${app.app} app`);
+      }
+      break;
+    }
+    default:
+      console.warn("Unknown app type:", app.type);
+      break;
+  }
+}
