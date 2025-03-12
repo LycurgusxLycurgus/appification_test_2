@@ -18,7 +18,9 @@ const QUALITY_SETTINGS = {
     maxBullets: 5,
     maxEffects: 3,
     drawDistance: 50,
-    shadowsEnabled: false
+    shadowsEnabled: false,
+    portalHitsRequired: 3,
+    portalEffectDetail: 8
   },
   medium: {
     targetCount: 10,
@@ -27,7 +29,9 @@ const QUALITY_SETTINGS = {
     maxBullets: 10,
     maxEffects: 5,
     drawDistance: 100,
-    shadowsEnabled: true
+    shadowsEnabled: true,
+    portalHitsRequired: 4,
+    portalEffectDetail: 16
   },
   high: {
     targetCount: 15,
@@ -36,7 +40,9 @@ const QUALITY_SETTINGS = {
     maxBullets: 20,
     maxEffects: 10,
     drawDistance: 200,
-    shadowsEnabled: true
+    shadowsEnabled: true,
+    portalHitsRequired: 5,
+    portalEffectDetail: 24
   }
 };
 
@@ -54,6 +60,15 @@ class TrainingChallengeManager {
     this.quality = gameState.graphicsQuality || 'low';
     this.qualitySettings = QUALITY_SETTINGS[this.quality];
     console.log(`Using ${this.quality} quality settings for training challenge`);
+    
+    // Explicitly initialize portalHitsRequired early with a default fallback
+    this.portalHitsRequired = 3; // Default fallback
+    if (this.qualitySettings && this.qualitySettings.portalHitsRequired) {
+      this.portalHitsRequired = this.qualitySettings.portalHitsRequired;
+    } else {
+      console.warn("portalHitsRequired not found in quality settings, using default:", this.portalHitsRequired);
+    }
+    console.log("Portal hits required:", this.portalHitsRequired);
     
     // Store original scene and camera
     this.originalScene = scene;
@@ -97,11 +112,18 @@ class TrainingChallengeManager {
     this.timer = null;
     this.activeEffects = [];
     
+    // Portal hit tracking
+    this.portalHitCount = 0;
+    this.portalLastHitTime = 0;
+    this.portalHitCooldown = 500; // ms
+    this.portalExitAvailable = false;
+    
     // Bind methods to retain 'this' context
     this.update = this.update.bind(this);
     this.handleShoot = this.handleShoot.bind(this);
     this.createTargets = this.createTargets.bind(this);
     this.cleanup = this.cleanup.bind(this);
+    this.handlePortalHit = this.handlePortalHit.bind(this);
     
     console.log("TrainingChallengeManager created");
   }
@@ -287,33 +309,93 @@ class TrainingChallengeManager {
       transparent: true,
       opacity: 0.7,
       emissive: 0xFF0000,
-      emissiveIntensity: 0.5,
+      emissiveIntensity: 0.7, // Increased for better visibility
       roughness: 0.3,
       metalness: 0.8
     });
     
     const portalMesh = new THREE.Mesh(portalGeometry, portalMaterial);
-    portalMesh.position.set(TRAINING_ARENA_SIZE/2 - 2, 1.5, TRAINING_ARENA_SIZE/2 - 2);
+    // Position the portal higher on the wall for shooting
+    portalMesh.position.set(TRAINING_ARENA_SIZE/2 - 2, 3.5, TRAINING_ARENA_SIZE/2 - 2);
+    
+    // Add portal-specific properties
+    portalMesh.userData = {
+      isPortal: true,
+      hitCount: 0,
+      hitsRequired: this.portalHitsRequired,
+      lastHitTime: 0
+    };
+    
     this.scene.add(portalMesh);
     
-    // Add a text label near the portal
-    this.createTextLabel("EXIT", portalMesh.position.x, portalMesh.position.y + 1, portalMesh.position.z);
+    // Create a single, well-designed EXIT sign with larger font (increased to 128px)
+    this.createTextLabel(`EXIT (Shoot ${this.portalHitsRequired}x)`, 
+      portalMesh.position.x, portalMesh.position.y + 1.2, portalMesh.position.z, 6, 1.5, 128);
     
     this.exitPortal = portalMesh;
+    
+    // Add a hit counter display - smaller and more integrated with the portal
+    this.portalHitDisplay = this.createTextLabel(`0/${this.portalHitsRequired}`, 
+      portalMesh.position.x, portalMesh.position.y - 1.0, portalMesh.position.z, 3, 0.75, 64);
+    
+    // Add a single, more subtle arrow indicator
+    this.createPortalIndicator(portalMesh.position.clone());
+    
+    // Add a subtle glow effect around the portal instead of a background panel
+    this.createPortalGlow(portalMesh);
+    
+    console.log("Exit portal created with required hits:", this.portalHitsRequired);
   }
   
-  // Create a floating text label
-  createTextLabel(text, x, y, z) {
+  // Create a subtle glow effect around the portal
+  createPortalGlow(portalMesh) {
+    const glowGeometry = new THREE.SphereGeometry(1.0, 24, 24);
+    const glowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x4444ff,
+      transparent: true,
+      opacity: 0.3,
+      side: THREE.BackSide
+    });
+    
+    const glowMesh = new THREE.Mesh(glowGeometry, glowMaterial);
+    glowMesh.position.copy(portalMesh.position);
+    
+    this.scene.add(glowMesh);
+    this.portalGlow = glowMesh;
+    
+    return glowMesh;
+  }
+  
+  // Create a floating text label with customizable size and font size
+  createTextLabel(text, x, y, z, width = 2, height = 0.5, fontSize = 96) {
     const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
-    canvas.width = 256;
-    canvas.height = 64;
+    canvas.width = 1024; // High resolution for better text quality
+    canvas.height = 256;
     
+    // Add subtle background for better contrast (more transparent)
+    context.fillStyle = 'rgba(0, 0, 102, 0.6)';
+    context.fillRect(0, 0, canvas.width, canvas.height);
+    
+    // Add subtle border
+    context.strokeStyle = 'rgba(0, 255, 255, 0.7)';
+    context.lineWidth = 10; // Thinner border
+    context.strokeRect(10, 10, canvas.width - 20, canvas.height - 20);
+    
+    // Add text with more subtle glow
     context.fillStyle = '#ffffff';
-    context.font = 'Bold 24px Arial';
+    context.font = `Bold ${fontSize}px Arial`; // Customizable font size
     context.textAlign = 'center';
     context.textBaseline = 'middle';
-    context.fillText(text, 128, 32);
+    
+    // Add moderate glow effect
+    context.shadowColor = 'rgba(0, 255, 255, 0.8)';
+    context.shadowBlur = 20; // Reduced blur
+    context.shadowOffsetX = 0;
+    context.shadowOffsetY = 0;
+    
+    // Draw text once (removed multiple passes)
+    context.fillText(text, canvas.width/2, canvas.height/2);
     
     const texture = new THREE.CanvasTexture(canvas);
     texture.minFilter = THREE.LinearFilter;
@@ -324,7 +406,7 @@ class TrainingChallengeManager {
       side: THREE.DoubleSide
     });
     
-    const geometry = new THREE.PlaneGeometry(2, 0.5);
+    const geometry = new THREE.PlaneGeometry(width, height);
     const mesh = new THREE.Mesh(geometry, material);
     mesh.position.set(x, y, z);
     
@@ -333,6 +415,42 @@ class TrainingChallengeManager {
     
     this.scene.add(mesh);
     return mesh;
+  }
+  
+  // Create a single, more subtle arrow indicator
+  createPortalIndicator(position) {
+    // Create arrow geometry - more subtle size
+    const arrowHeight = 1.5; // Reduced size
+    const arrowWidth = 1.0; // Reduced size
+    
+    const arrowShape = new THREE.Shape();
+    arrowShape.moveTo(0, arrowHeight/2);
+    arrowShape.lineTo(-arrowWidth/2, -arrowHeight/2);
+    arrowShape.lineTo(0, -arrowHeight/4);
+    arrowShape.lineTo(arrowWidth/2, -arrowHeight/2);
+    arrowShape.lineTo(0, arrowHeight/2);
+    
+    const arrowGeometry = new THREE.ShapeGeometry(arrowShape);
+    const arrowMaterial = new THREE.MeshBasicMaterial({
+      color: 0x00ffff,
+      transparent: true,
+      opacity: 0.7, // More subtle
+      side: THREE.DoubleSide
+    });
+    
+    const arrow = new THREE.Mesh(arrowGeometry, arrowMaterial);
+    arrow.position.set(position.x, position.y + 2.5, position.z); // Position between portal and sign
+    
+    // Add pulsing animation
+    arrow.userData = {
+      isIndicator: true,
+      pulseTime: 0
+    };
+    
+    this.scene.add(arrow);
+    this.portalIndicator = arrow;
+    
+    return arrow;
   }
   
   // Create score and timer UI
@@ -554,6 +672,13 @@ class TrainingChallengeManager {
               
               // Skip the bullet itself
               if (object === bullet) continue;
+              
+              // Check if hit the exit portal
+              if (object === this.exitPortal) {
+                this.handlePortalHit();
+                hitSomething = true;
+                break;
+              }
               
               // Check if hit a target
               if (object.userData && object.userData.isTarget) {
@@ -819,6 +944,9 @@ class TrainingChallengeManager {
       // Check for exit portal proximity
       this.checkExitPortalProximity();
       
+      // Update portal indicator animation
+      this.updatePortalIndicator(cappedDeltaTime);
+      
       // Render the scene (if we have a renderer)
       if (this.renderer) {
         this.renderer.render(this.scene, this.camera);
@@ -1031,6 +1159,11 @@ class TrainingChallengeManager {
         this.finalScoreDiv = null;
       }
       
+      if (this.exitMsgDiv) {
+        document.body.removeChild(this.exitMsgDiv);
+        this.exitMsgDiv = null;
+      }
+      
       // Remove event listeners
       document.removeEventListener('mousedown', this.handleShoot);
       
@@ -1049,6 +1182,245 @@ class TrainingChallengeManager {
       }
     } catch (error) {
       console.error("Error during cleanup:", error);
+    }
+  }
+  
+  // Handle portal hit
+  handlePortalHit() {
+    const currentTime = Date.now();
+    
+    // Check cooldown
+    if (currentTime - this.portalLastHitTime < this.portalHitCooldown) {
+      console.log("Portal hit ignored - cooldown active");
+      return;
+    }
+    
+    this.portalLastHitTime = currentTime;
+    this.portalHitCount++;
+    
+    console.log(`Portal hit! Count: ${this.portalHitCount}/${this.portalHitsRequired}`);
+    
+    // Update portal appearance based on hit count
+    if (this.exitPortal) {
+      // Change color based on hit progress - FIXED COLOR CALCULATION
+      const progress = this.portalHitCount / this.portalHitsRequired;
+      
+      // Remove Math.floor and use direct 0-1 values for THREE.Color
+      const r = (1 - progress);
+      const g = progress;
+      const color = new THREE.Color(r, g, 0);
+      
+      console.log(`Portal color updated - progress: ${progress}, r: ${r}, g: ${g}`);
+      
+      this.exitPortal.material.color = color;
+      this.exitPortal.material.emissive = color;
+      
+      // Update portal glow color to match portal
+      if (this.portalGlow) {
+        this.portalGlow.material.color = new THREE.Color(
+          r * 0.5 + 0.2, 
+          g * 0.5 + 0.2, 
+          0.5
+        );
+      }
+      
+      // Create hit effect - more moderate size
+      this.createPortalHitEffect(this.exitPortal.position.clone(), 1.5); // Slightly reduced effect
+      
+      // Update hit counter display
+      if (this.portalHitDisplay) {
+        this.portalHitDisplay.userData.text = `${this.portalHitCount}/${this.portalHitsRequired}`;
+        
+        // Update the texture
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.width = 512; // Reduced resolution
+        canvas.height = 128;
+        
+        // Add subtle background
+        context.fillStyle = 'rgba(0, 0, 102, 0.6)';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+        
+        // Add subtle border
+        context.strokeStyle = 'rgba(0, 255, 255, 0.7)';
+        context.lineWidth = 6;
+        context.strokeRect(6, 6, canvas.width - 12, canvas.height - 12);
+        
+        context.fillStyle = '#ffffff';
+        context.font = 'Bold 64px Arial'; // Using fixed size here
+        context.textAlign = 'center';
+        context.textBaseline = 'middle';
+        
+        // Add moderate glow effect
+        context.shadowColor = 'rgba(0, 255, 255, 0.8)';
+        context.shadowBlur = 15;
+        context.shadowOffsetX = 0;
+        context.shadowOffsetY = 0;
+        
+        // Draw text once
+        context.fillText(`${this.portalHitCount}/${this.portalHitsRequired}`, canvas.width/2, canvas.height/2);
+        
+        const texture = new THREE.CanvasTexture(canvas);
+        texture.minFilter = THREE.LinearFilter;
+        
+        this.portalHitDisplay.material.map.dispose();
+        this.portalHitDisplay.material.map = texture;
+      }
+      
+      // Check if we've reached the required hits
+      if (this.portalHitCount >= this.portalHitsRequired && !this.portalExitAvailable) {
+        console.log("Portal activation threshold reached!");
+        this.portalExitAvailable = true;
+        this.showExitAvailableMessage();
+        
+        // Trigger exit after a delay
+        setTimeout(() => {
+          if (this.isActive) {
+            console.log("Exiting challenge via portal activation");
+            this.exitChallenge();
+          }
+        }, 3000);
+      }
+    }
+  }
+  
+  // Create portal hit effect with size parameter
+  createPortalHitEffect(position, sizeMultiplier = 1.0) {
+    // Limit number of active effects based on quality
+    if (this.activeEffects.length >= this.qualitySettings.maxEffects) {
+      // Remove oldest effect
+      const oldestEffect = this.activeEffects.shift();
+      this.scene.remove(oldestEffect);
+    }
+    
+    // Adjust detail based on quality
+    const effectDetail = this.qualitySettings.portalEffectDetail;
+    
+    // Larger hit effect
+    const hitGeometry = new THREE.SphereGeometry(0.3 * sizeMultiplier, effectDetail, effectDetail);
+    const hitMaterial = new THREE.MeshStandardMaterial({ 
+      color: 0xFFFFFF, 
+      transparent: true, 
+      opacity: 1,
+      emissive: 0xFFFFFF,
+      emissiveIntensity: 1,
+      flatShading: this.quality === 'low'
+    });
+    
+    const hitEffect = new THREE.Mesh(hitGeometry, hitMaterial);
+    hitEffect.position.copy(position);
+    this.scene.add(hitEffect);
+    this.activeEffects.push(hitEffect);
+    
+    // Animate and remove with more dramatic effect
+    let scale = 1;
+    let opacity = 1;
+    
+    const animateHit = () => {
+      if (!this.isActive) {
+        this.scene.remove(hitEffect);
+        const index = this.activeEffects.indexOf(hitEffect);
+        if (index !== -1) this.activeEffects.splice(index, 1);
+        return;
+      }
+      
+      // Adjust animation speed based on quality
+      const scaleStep = this.quality === 'low' ? 0.2 : (this.quality === 'medium' ? 0.15 : 0.1);
+      const opacityStep = this.quality === 'low' ? 0.1 : (this.quality === 'medium' ? 0.075 : 0.05);
+      
+      scale += scaleStep * sizeMultiplier;
+      opacity -= opacityStep;
+      
+      hitEffect.scale.set(scale, scale, scale);
+      hitMaterial.opacity = opacity;
+      
+      if (opacity <= 0) {
+        this.scene.remove(hitEffect);
+        const index = this.activeEffects.indexOf(hitEffect);
+        if (index !== -1) this.activeEffects.splice(index, 1);
+        return;
+      }
+      
+      requestAnimationFrame(animateHit);
+    };
+    
+    animateHit();
+  }
+  
+  // Show exit available message
+  showExitAvailableMessage() {
+    const exitMsgDiv = document.createElement('div');
+    exitMsgDiv.id = 'exit-available-message';
+    exitMsgDiv.style.position = 'absolute';
+    exitMsgDiv.style.top = '50%';
+    exitMsgDiv.style.left = '50%';
+    exitMsgDiv.style.transform = 'translate(-50%, -50%)';
+    exitMsgDiv.style.fontSize = '88px'; // Larger font
+    exitMsgDiv.style.fontWeight = 'bold';
+    exitMsgDiv.style.color = '#00FF00';
+    exitMsgDiv.style.textShadow = '2px 2px 8px #00FFFF'; // Stronger glow
+    exitMsgDiv.style.backgroundColor = 'rgba(0, 0, 0, 0.8)'; // More opaque background
+    exitMsgDiv.style.padding = '30px'; // Larger padding
+    exitMsgDiv.style.borderRadius = '15px';
+    exitMsgDiv.style.textAlign = 'center';
+    exitMsgDiv.style.border = '3px solid #00FFFF'; // Add border
+    exitMsgDiv.innerHTML = `
+      <div>EXIT PORTAL ACTIVATED!</div>
+      <div style="font-size: 30px; margin-top: 20px;">Exiting in 3 seconds...</div>
+    `;
+    
+    document.body.appendChild(exitMsgDiv);
+    this.exitMsgDiv = exitMsgDiv;
+    
+    // Create a dramatic effect on the portal
+    if (this.exitPortal) {
+      this.exitPortal.material.color = new THREE.Color(0x00FF00);
+      this.exitPortal.material.emissive = new THREE.Color(0x00FF00);
+      this.exitPortal.material.emissiveIntensity = 1.5; // Stronger glow
+      
+      // Pulse animation - more dramatic
+      let scale = 1;
+      let growing = true;
+      
+      const animatePortal = () => {
+        if (!this.isActive) return;
+        
+        if (growing) {
+          scale += 0.08; // Faster growth
+          if (scale >= 2.0) growing = false; // Larger max size
+        } else {
+          scale -= 0.08; // Faster shrinking
+          if (scale <= 1.0) growing = true;
+        }
+        
+        this.exitPortal.scale.set(scale, scale, scale);
+        
+        if (this.isActive && this.portalExitAvailable) {
+          requestAnimationFrame(animatePortal);
+        }
+      };
+      
+      animatePortal();
+    }
+  }
+  
+  // Update portal indicator animation
+  updatePortalIndicator(deltaTime) {
+    // Update main indicator with more subtle animation
+    if (this.portalIndicator) {
+      // Pulse the indicator with more subtle effect
+      this.portalIndicator.userData.pulseTime += deltaTime;
+      const pulse = 0.9 + 0.2 * Math.sin(this.portalIndicator.userData.pulseTime * 3); // More subtle pulse
+      this.portalIndicator.scale.set(pulse, pulse, pulse);
+      
+      // Make it face the camera
+      this.portalIndicator.lookAt(this.camera.position);
+    }
+    
+    // Update portal glow with subtle pulsing
+    if (this.portalGlow) {
+      const glowPulse = 1.0 + 0.1 * Math.sin(Date.now() * 0.002);
+      this.portalGlow.scale.set(glowPulse, glowPulse, glowPulse);
     }
   }
 }
